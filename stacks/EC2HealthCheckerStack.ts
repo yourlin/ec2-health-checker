@@ -4,9 +4,9 @@ import * as events from "aws-cdk-lib/aws-events";
 export function EC2HealthCheckerStack({ stack }: StackContext) {
   const table = new Table(stack, "EC2_Status", {
     fields: {
-      InstanceId: "string",
+      InstanceId: "string"
     },
-    primaryIndex: { partitionKey: "InstanceId" },
+    primaryIndex: { partitionKey: "InstanceId" }
   });
 
   // EC2停止时间
@@ -14,15 +14,15 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table],
-      },
+        bind: [table]
+      }
     },
     cdk: {
       eventBus: events.EventBus.fromEventBusName(
         stack,
         "ImportedBus",
         "default"
-      ),
+      )
     },
     rules: {
       EC2_Stop_Event: {
@@ -30,14 +30,14 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
           source: ["aws.ec2"],
           detailType: ["EC2 Instance State-change Notification"],
           detail: {
-            state: ["stopped"],
-          },
+            state: ["stopped"]
+          }
         },
         targets: {
-          restart: "packages/functions/src/event/ec2_event.stopEventReceive",
-        },
-      },
-    },
+          restart: "packages/functions/src/event/ec2_event.stopEventReceive"
+        }
+      }
+    }
   });
 
   // Create Topic
@@ -45,12 +45,12 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table],
-      },
+        bind: [table]
+      }
     },
     subscribers: {
-      ec2DataAbnormal: "packages/functions/src/event/ec2_event.abnormalReceive",
-    },
+      ec2DataAbnormal: "packages/functions/src/event/ec2_event.abnormalReceive"
+    }
   });
 
   // Create the HTTP API
@@ -58,25 +58,26 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table],
-      },
+        bind: [table]
+      }
     },
     routes: {
       "POST /ec2/reboot/{id}":
         "packages/functions/src/api/ec2_controller.reboot",
       "POST /ec2/forceStopAndStart/{id}":
         "packages/functions/src/api/ec2_controller.forceStopAndStart",
-      "GET /ec2/abnormal": "packages/functions/src/api/ec2_controller.abnormal",
-    },
+      "GET /ec2/abnormal": "packages/functions/src/api/ec2_controller.abnormal"
+    }
   });
 
   // Allow the API to access the table and EC2
   api.attachPermissions([table, "ec2"]);
   // Allow lambda to access the table and EC2
   bus.attachPermissions([table, "ec2"]);
+  topic.attachPermissions([table, "ec2"]);
 
   // Show the API endpoint in the output
   stack.addOutputs({
-    ApiEndpoint: api.url,
+    ApiEndpoint: api.url
   });
 }
