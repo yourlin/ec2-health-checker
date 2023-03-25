@@ -1,20 +1,28 @@
-import { Api, StackContext, Table, Topic, EventBus } from "sst/constructs";
+import { Api, StackContext, Table, Topic, EventBus, Cron } from "sst/constructs";
 import * as events from "aws-cdk-lib/aws-events";
 
 export function EC2HealthCheckerStack({ stack }: StackContext) {
-  const table = new Table(stack, "EC2_Status", {
+  const tableEC2Status = new Table(stack, "EC2_Status", {
     fields: {
       InstanceId: "string"
     },
-    primaryIndex: { partitionKey: "InstanceId" }
+    primaryIndex: { partitionKey: "InstanceId" },
+    timeToLiveAttribute: "TTL"
   });
+  // const tableEC2StatusConfig = new Table(stack, "EC2_Status_Config", {
+  //   fields: {
+  //     Rebooting: "number"
+  //   },
+  //   primaryIndex: { partitionKey: "Rebooting" },
+  //   timeToLiveAttribute: "TTL"
+  // });
 
-  // EC2停止时间
+  // EC2停止事件
   const bus = new EventBus(stack, "EC2HealthChecker", {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table]
+        bind: [tableEC2Status]
       }
     },
     cdk: {
@@ -41,11 +49,11 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
   });
 
   // Create Topic
-  const topic = new Topic(stack, "ec2-check-failed-email", {
+  const topic = new Topic(stack, "ec2-check-failed", {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table]
+        bind: [tableEC2Status]
       }
     },
     subscribers: {
@@ -53,12 +61,19 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
     }
   });
 
+  // 主动轮询EC2事件
+  const cron = new Cron(stack, "EC2-Schedule-Check", {
+    schedule: "rate(1 minute)",
+    job: "packages/functions/src/event/ec2_event.ec2ScheduleCheck"
+  });
+  cron.bind([tableEC2Status]);
+
   // Create the HTTP API
   const api = new Api(stack, "Api", {
     defaults: {
       function: {
         // Bind the table name to our API
-        bind: [table]
+        bind: [tableEC2Status]
       }
     },
     routes: {
@@ -71,10 +86,11 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
   });
 
   // Allow the API to access the table and EC2
-  api.attachPermissions([table, "ec2"]);
+  api.attachPermissions([tableEC2Status, "ec2"]);
   // Allow lambda to access the table and EC2
-  bus.attachPermissions([table, "ec2"]);
-  topic.attachPermissions([table, "ec2"]);
+  bus.attachPermissions([tableEC2Status, "ec2"]);
+  topic.attachPermissions([tableEC2Status, "ec2"]);
+  cron.attachPermissions([tableEC2Status, "ec2", "cloudwatch"]);
 
   // Show the API endpoint in the output
   stack.addOutputs({
