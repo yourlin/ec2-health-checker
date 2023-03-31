@@ -1,21 +1,14 @@
 import { Api, StackContext, Table, Topic, EventBus, Cron } from "sst/constructs";
 import * as events from "aws-cdk-lib/aws-events";
+import { Duration } from "aws-cdk-lib";
 
 export function EC2HealthCheckerStack({ stack }: StackContext) {
   const tableEC2Status = new Table(stack, "EC2_Status", {
     fields: {
       InstanceId: "string"
     },
-    primaryIndex: { partitionKey: "InstanceId" },
-    timeToLiveAttribute: "TTL"
+    primaryIndex: { partitionKey: "InstanceId" }
   });
-  // const tableEC2StatusConfig = new Table(stack, "EC2_Status_Config", {
-  //   fields: {
-  //     Rebooting: "number"
-  //   },
-  //   primaryIndex: { partitionKey: "Rebooting" },
-  //   timeToLiveAttribute: "TTL"
-  // });
 
   // EC2停止事件
   const bus = new EventBus(stack, "EC2HealthChecker", {
@@ -49,51 +42,54 @@ export function EC2HealthCheckerStack({ stack }: StackContext) {
   });
 
   // Create Topic
-  const topic = new Topic(stack, "ec2-check-failed", {
-    defaults: {
-      function: {
-        // Bind the table name to our API
-        bind: [tableEC2Status]
-      }
-    },
-    subscribers: {
-      ec2DataAbnormal: "packages/functions/src/event/ec2_event.abnormalReceive"
-    }
-  });
+  // const topic = new Topic(stack, "ec2-check-failed", {
+  //   defaults: {
+  //     function: {
+  //       // Bind the table name to our API
+  //       bind: [tableEC2Status]
+  //     }
+  //   },
+  //   subscribers: {
+  //     ec2DataAbnormal: "packages/functions/src/event/ec2_event.abnormalReceive"
+  //   }
+  // });
 
   // 主动轮询EC2事件
-  const cron = new Cron(stack, "EC2-Schedule-Check", {
+  const cron = new Cron(stack, "EC2ScheduleCheck", {
     schedule: "rate(1 minute)",
-    job: "packages/functions/src/event/ec2_event.ec2ScheduleCheck"
+    job: {
+      function: "packages/functions/src/event/ec2_event.ec2ScheduleCheck",
+      timeout: Duration.seconds(30)
+    }
   });
   cron.bind([tableEC2Status]);
 
   // Create the HTTP API
-  const api = new Api(stack, "Api", {
-    defaults: {
-      function: {
-        // Bind the table name to our API
-        bind: [tableEC2Status]
-      }
-    },
-    routes: {
-      "POST /ec2/reboot/{id}":
-        "packages/functions/src/api/ec2_controller.reboot",
-      "POST /ec2/forceStopAndStart/{id}":
-        "packages/functions/src/api/ec2_controller.forceStopAndStart",
-      "GET /ec2/abnormal": "packages/functions/src/api/ec2_controller.abnormal"
-    }
-  });
+  // const api = new Api(stack, "Api", {
+  //   defaults: {
+  //     function: {
+  //       // Bind the table name to our API
+  //       bind: [tableEC2Status]
+  //     }
+  //   },
+  //   routes: {
+  //     "POST /ec2/reboot/{id}":
+  //       "packages/functions/src/api/ec2_controller.reboot",
+  //     "POST /ec2/forceStopAndStart/{id}":
+  //       "packages/functions/src/api/ec2_controller.forceStopAndStart",
+  //     "GET /ec2/abnormal": "packages/functions/src/api/ec2_controller.abnormal"
+  //   }
+  // });
 
   // Allow the API to access the table and EC2
-  api.attachPermissions([tableEC2Status, "ec2"]);
+  // api.attachPermissions([tableEC2Status, "ec2"]);
   // Allow lambda to access the table and EC2
   bus.attachPermissions([tableEC2Status, "ec2"]);
-  topic.attachPermissions([tableEC2Status, "ec2"]);
+  // topic.attachPermissions([tableEC2Status, "ec2"]);
   cron.attachPermissions([tableEC2Status, "ec2", "cloudwatch"]);
 
   // Show the API endpoint in the output
-  stack.addOutputs({
-    ApiEndpoint: api.url
-  });
+  // stack.addOutputs({
+  //   ApiEndpoint: api.url
+  // });
 }

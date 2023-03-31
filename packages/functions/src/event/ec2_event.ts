@@ -5,7 +5,8 @@ import { EventBridgeEvent } from "aws-lambda";
 import { DocumentClient } from "aws-sdk/lib/dynamodb/document_client";
 import { ms } from "../helper/time-helper";
 import { GetMetricDataInput } from "aws-sdk/clients/cloudwatch";
-import { MAX_REBOOT_INSTANCE_NUM } from "../config";
+import { MAX_REBOOT_INSTANCE_NUM, METRIC_PERIOD, MAX_DATA_POINTS } from "../config";
+import * as console from "console";
 
 const ec2 = new EC2();
 const dynamoDb = new DynamoDB.DocumentClient();
@@ -46,7 +47,7 @@ async function shutdownEC2(instanceId: string) {
 
   let stopRes = await stopResult.promise();
   // 停机成功后需要，记录一条信息表示这个实例是需要手动重启的，再关机检查event中，会判断是否再次启动
-  const now = new Date();
+  // const now = new Date();
   let putParams: DynamoDB.Types.UpdateItemInput = {
     TableName: Table.EC2_Status.tableName,
     Key: {
@@ -65,21 +66,21 @@ async function shutdownEC2(instanceId: string) {
   await dynamoDb.update(putParams).promise();
 }
 
-export async function abnormalReceive(event: EventBridgeEvent<any, any>) {
-  const msg = JSON.parse(event.Records[0].Sns.Message);
-  const instanceId = msg.Trigger.Dimensions[0].value;
-  const params = {
-    TableName: Table.EC2_Status.tableName,
-    Item: {
-      InstanceId: instanceId,
-      AlarmAt: ms()
-    }
-  };
-  let res = await dynamoDb.put(params).promise();
-  console.log(`检测到实例异常状态: ${instanceId}`);
-  await shutdownEC2(instanceId);
-  return;
-}
+// export async function abnormalReceive(event: EventBridgeEvent<any, any>) {
+//   const msg = JSON.parse(event.Records[0].Sns.Message);
+//   const instanceId = msg.Trigger.Dimensions[0].value;
+//   const params = {
+//     TableName: Table.EC2_Status.tableName,
+//     Item: {
+//       InstanceId: instanceId,
+//       AlarmAt: ms()
+//     }
+//   };
+//   let res = await dynamoDb.put(params).promise();
+//   console.log(`检测到实例异常状态: ${instanceId}`);
+//   await shutdownEC2(instanceId);
+//   return;
+// }
 
 export async function stopEventReceive(event: EventBridgeEvent<any, any>) {
   console.log("EC2 停止事件");
@@ -123,7 +124,7 @@ export async function stopEventReceive(event: EventBridgeEvent<any, any>) {
 }
 
 export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
-  const maxDataPoints = 3;
+  console.log("开始计划任务");
   // 查询EC2 instance 列表，可能存在翻页，获取所有id后调用异步健康检查
   let instanceIDList = [];
   let params = {
@@ -142,7 +143,6 @@ export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
       }
     ],
     NextToken: ""
-    // MaxResults: 5 // 每页大小
   };
   let res = await ec2.describeInstances(params).promise(); // 只检查正在运行中的实例
   while (res.Reservations?.length !== 0) {
@@ -167,12 +167,12 @@ export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
       MetricDataQueries: [{
         Id: `q1`,
         Expression: `SELECT AVG(CPUUtilization) FROM SCHEMA("AWS/EC2", InstanceId) WHERE InstanceId = '${instanceId}'`,
-        Period: 300,
+        Period: METRIC_PERIOD,
         Label: "Instance CPU Utilization"
       }],
-      StartTime: new Date(now.getTime() - 16 * 60 * 1000), //相对时间16分钟
+      StartTime: new Date(now.getTime() - 6 * 60 * 1000), //相对时间6分钟
       EndTime: now,
-      MaxDatapoints: maxDataPoints
+      MaxDatapoints: MAX_DATA_POINTS
     };
     cpuMetricsJobs.push(cloudwatch.getMetricData(metricsParams).promise());
   }
@@ -184,12 +184,12 @@ export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
       MetricDataQueries: [{
         Id: "q2",
         Expression: `SELECT MAX(StatusCheckFailed) FROM SCHEMA("AWS/EC2", InstanceId) WHERE InstanceId = '${instanceId}'`,
-        Period: 300,
+        Period: METRIC_PERIOD,
         Label: "Instance Status Check Failed"
       }],
-      StartTime: new Date(now.getTime() - 16 * 60 * 1000), //相对时间16分钟
+      StartTime: new Date(now.getTime() - 6 * 60 * 1000), //相对时间6分钟
       EndTime: now,
-      MaxDatapoints: maxDataPoints
+      MaxDatapoints: MAX_DATA_POINTS
     };
     statusMetricsJobs.push(cloudwatch.getMetricData(metricsParams).promise());
   }
@@ -201,11 +201,17 @@ export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
     const cpuResult = cpuResults[i];
     const statusResult = statusResults[i];
 
+    // todo: delete test code
+    // for (let j = 0; j < statusResult.MetricDataResults[0].Values.length; j++) {
+    //   statusResult.MetricDataResults[0].Values[j] = 1;
+    // }
+    // --------
+
     // 数据缺失，且健康检查失败
-    if (cpuResult.MetricDataResults[0].Values.length < maxDataPoints
-      && statusResult.MetricDataResults[0].Values.at(-1) === 1) {
-      console.log(`Instance ID: ${instanceIDList[i]}，检查冷却时间，重启`);
-      await shutdownEC2(instanceIDList[i]);
+    if (cpuResult.MetricDataResults[0].Values.length === 0
+      || statusResult.MetricDataResults[0].Values.at(-1) === 1) {
+      console.log(`Instance ID: ${instanceIDList[i]}，重启`);
+      // await shutdownEC2(instanceIDList[i]);
       abnormalCount++;
 
       if (abnormalCount >= MAX_REBOOT_INSTANCE_NUM) {
@@ -214,5 +220,4 @@ export async function ec2ScheduleCheck(event: EventBridgeEvent<any, any>) {
     }
   }
 
-  // todo解析结果判断是否重启
 }
